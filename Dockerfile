@@ -44,7 +44,6 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh \
     && rm -f /etc/nginx/sites-enabled/default \
     && printf 'Ubuntu 24.04 LTS web terminal. Persistent files live in /data.\n' > /etc/motd
 
-VOLUME ["/data"]
 WORKDIR /data
 EXPOSE 8080
 

@@ -1,26 +1,30 @@
-# Ubuntu 24.04 Web Terminal
+# Deploy and Host Ubuntu 24.04 Web Terminal on Railway
 
-A persistence-first Ubuntu 24.04 LTS box in the browser. ttyd is pinned to the current upstream release, a password is generated on deploy, `/data` is a real volume, and Railway gets an HTTP healthcheck. This is the maintained replacement for rotting Ubuntu-in-browser marketplace clones (Ubuntu 22.04 + ttyd 1.7.3, no volume, default `password`).
+Ubuntu 24.04 LTS in the browser via pinned ttyd. Railway generates a password, mounts `/data` as a real volume, and probes `/health`. This is the persistence-first replacement for rotting Ubuntu-in-browser clones (Ubuntu 22.04 + ttyd 1.7.3, no volume, default `password`).
 
 No SSH daemon, no TCP/22, no `PermitRootLogin`, no nmap.
 
-## One-click deploy
+## About Hosting Ubuntu 24.04 Web Terminal
 
-1. Open the template on Railway and click **Deploy**.
-2. Railway generates `TERMINAL_PASSWORD` via `${{secret()}}`. Copy it from the service **Variables** tab.
-3. Open the public HTTPS domain. The browser asks for HTTP basic auth.
-4. Username: `ubuntu` (override with `TTYD_USER` if you change it). Password: the generated `TERMINAL_PASSWORD`.
+The image is Ubuntu 24.04 LTS pinned by digest. PID 1 is tini. ttyd 1.7.7 is checksum-verified (not ancient 1.7.3). HTTP basic auth is required: username `ubuntu`, password from generated `TERMINAL_PASSWORD`. nginx only fronts local ttyd so `/health` can return 200 without unlocking the shell. It is not an open internet proxy.
+
+One-click deploy:
+
+1. Click **Deploy** on this template.
+2. Copy `TERMINAL_PASSWORD` from the service **Variables** tab (`${{secret()}}`).
+3. Open the public HTTPS domain. The browser shows HTTP basic auth.
+4. Log in as `ubuntu` with the generated password.
 5. Your shell starts in `/data`, which is the mounted volume.
 
-## Variables
+### Variables
 
 | Name | Required | Default | Notes |
 | --- | --- | --- | --- |
 | `TERMINAL_PASSWORD` | **yes** | `${{secret()}}` | Generated secret. There is no default `password`. The container refuses to boot if this is empty or `password`. |
-| `TTYD_USER` | no | `ubuntu` | HTTP basic-auth username. |
+| `TTYD_USER` | no | `ubuntu` | Optional HTTP basic-auth username override. |
 | `PORT` | set by Railway | `8080` | Public HTTP port. Do not change. |
 
-## Volume
+### Volume
 
 | Mount | Purpose |
 | --- | --- |
@@ -28,32 +32,28 @@ No SSH daemon, no TCP/22, no `PermitRootLogin`, no nmap.
 
 `apt-get` packages live in the container filesystem: they last until the next image rebuild, not across template upgrades. Keep work product in `/data`.
 
-## Ports
+### Ports
 
 | Port | Public | Service |
 | --- | --- | --- |
 | `$PORT` (HTTP/HTTPS) | yes | ttyd web terminal + `/health` |
 | 22 / TCP | **no** | Not exposed. sshd is not installed. |
 
-## Login
-
-The public URL is password-gated with HTTP basic auth (ttyd `-c`).
+### Login
 
 ```bash
 # Healthcheck (no auth)
 curl -fsS https://<your-domain>/health
 
-# Login page / auth challenge
+# Auth challenge / login prompt
 curl -I https://<your-domain>/
 ```
 
-A `401` with `WWW-Authenticate` on `/` is expected until you send `TTYD_USER` / `TERMINAL_PASSWORD`. After login you get an Ubuntu 24.04 bash shell with git, python3, pip, venv, curl, and ca-certificates preinstalled.
-
-## Healthcheck
+A `401` with `WWW-Authenticate` on `/` is expected until you send `ubuntu` / `TERMINAL_PASSWORD`. After login you get Ubuntu 24.04 bash with git, python3, pip, venv, curl, and ca-certificates.
 
 Railway probes `GET /health`, which returns `200 ok` without credentials so the deployment can pass health while the terminal stays locked.
 
-## Why this listing
+### Why this listing is healthier
 
 | | Typical rotting clone | This template |
 | --- | --- | --- |
@@ -65,4 +65,28 @@ Railway probes `GET /health`, which returns `200 ok` without credentials so the 
 | Process 1 | ad-hoc | tini |
 | SSH | sometimes sshd + TCP/22 | none |
 
-PID 1 is tini so ttyd and nginx are reaped on exit. nginx only fronts the local ttyd port so `/health` can stay public while the shell stays authenticated. It is not an open internet proxy.
+## Common Use Cases
+
+- A persistent Ubuntu workspace in the browser for diagnostics and small scripts.
+- A throwaway-but-sticky Linux box without exposing SSH or TCP/22.
+- Replacing Ubuntu-Linux / ttyd 1.7.3 marketplace clones that lose files on redeploy.
+
+## Dependencies for Ubuntu 24.04 Web Terminal Hosting
+
+- Ubuntu 24.04 LTS (pinned digest).
+- ttyd 1.7.7 from the upstream GitHub release (checksum-verified).
+- tini as PID 1.
+- A Railway volume mounted at `/data`.
+- A public HTTP domain for ttyd.
+
+### Deployment Dependencies
+
+- Ubuntu Docker image: https://hub.docker.com/_/ubuntu
+- ttyd releases: https://github.com/tsl0922/ttyd/releases
+- Source: https://github.com/leoisadev1/railway-template-ubuntu-web-terminal
+
+## Why Deploy Ubuntu 24.04 Web Terminal on Railway?
+
+Railway is a singular platform to deploy your infrastructure stack. Railway will host your infrastructure so you don't have to deal with configuration, while allowing you to vertically and horizontally scale it.
+
+By deploying Ubuntu 24.04 Web Terminal on Railway, you are one step closer to supporting a complete full-stack application with minimal burden. Host your servers, databases, AI agents, and more on Railway.

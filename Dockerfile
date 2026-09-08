@@ -24,8 +24,10 @@ RUN apt-get update \
         python3-pip \
         python3-venv \
         tini \
+        util-linux \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /data /usr/local/share/ttyd
+    && mkdir -p /data /usr/local/share/ttyd \
+    && usermod --home /data --shell /bin/bash ubuntu
 
 RUN set -eux; \
     case "${TARGETARCH}" in \

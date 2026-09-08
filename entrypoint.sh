@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Start password-gated ttyd behind a tiny nginx that exposes /health for Railway.
 set -euo pipefail
 
 PORT="${PORT:-8080}"
@@ -12,25 +11,41 @@ if [[ -z "${PASSWORD}" ]]; then
   exit 1
 fi
 
-# Refuse the rotting-marketplace default.
-if [[ "${PASSWORD}" == "password" || "${PASSWORD}" == "Password" ]]; then
+if [[ "${PASSWORD,,}" == "password" ]]; then
   echo "TERMINAL_PASSWORD must not be the default value 'password'." >&2
   exit 1
 fi
 
+if [[ "${TTYD_USER}" == *:* || "${TTYD_USER}" =~ [[:cntrl:]] ]]; then
+  echo "TTYD_USER must not contain colons or control characters." >&2
+  exit 1
+fi
+
+for port in "${PORT}" "${TTYD_INTERNAL_PORT}"; do
+  if [[ ! "${port}" =~ ^[0-9]{1,5}$ ]] || (( 10#${port} < 1 || 10#${port} > 65535 )); then
+    echo "Ports must be integers between 1 and 65535." >&2
+    exit 1
+  fi
+done
+PORT=$((10#${PORT}))
+TTYD_INTERNAL_PORT=$((10#${TTYD_INTERNAL_PORT}))
+if [[ "${PORT}" == "${TTYD_INTERNAL_PORT}" ]]; then
+  echo "PORT and TTYD_INTERNAL_PORT must differ." >&2
+  exit 1
+fi
+
 mkdir -p /data /tmp/nginx/body /tmp/nginx/proxy /tmp/nginx/fastcgi /tmp/nginx/uwsgi /tmp/nginx/scgi
-chmod 0755 /data
+# Migrate files created by older root-shell images without following symlinks.
+find /data -xdev -uid 0 -exec chown -h ubuntu:ubuntu {} +
+chown ubuntu:ubuntu /data
+chmod 0750 /data
+for file in .profile .bashrc .bash_logout; do
+  if [[ ! -e "/data/${file}" && ! -L "/data/${file}" ]]; then
+    install -o ubuntu -g ubuntu -m 0644 "/etc/skel/${file}" "/data/${file}"
+  fi
+done
 cd /data
 export HOME=/data
-
-if [[ ! -e /data/.profile ]]; then
-  cat > /data/.profile <<'EOF'
-export HOME=/data
-export PATH="$HOME/.local/bin:$PATH"
-cd /data 2>/dev/null || true
-echo "Persistent workspace: /data (survives redeploys). Packages you apt-get install last until the next image rebuild."
-EOF
-fi
 
 NGINX_CONF="/tmp/nginx.conf"
 cat > "${NGINX_CONF}" <<EOF
@@ -56,7 +71,20 @@ http {
     listen [::]:${PORT} default_server;
     server_name _;
     location = /health {
-      add_header Content-Type text/plain;
+      proxy_pass http://127.0.0.1:${TTYD_INTERNAL_PORT}/;
+      proxy_set_header Authorization "";
+      proxy_set_header Upgrade "";
+      proxy_set_header Connection close;
+      proxy_connect_timeout 3s;
+      proxy_read_timeout 3s;
+      proxy_send_timeout 3s;
+      proxy_intercept_errors on;
+      proxy_hide_header WWW-Authenticate;
+      error_page 401 =200 @healthy;
+    }
+    # Only a live ttyd authentication challenge reaches this internal location.
+    location @healthy {
+      default_type text/plain;
       add_header Cache-Control "no-store";
       return 200 "ok\\n";
     }
@@ -75,9 +103,24 @@ http {
 }
 EOF
 
-echo "Starting ttyd ${TTYD_USER}@127.0.0.1:${TTYD_INTERNAL_PORT} and nginx on :${PORT}"
+pids=()
+cleanup() {
+  trap - EXIT TERM INT
+  if (( ${#pids[@]} )); then
+    kill -TERM "${pids[@]}" 2>/dev/null || true
+    kill -CONT "${pids[@]}" 2>/dev/null || true
+    wait "${pids[@]}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
-ttyd \
+echo "Starting password-gated ttyd as ubuntu and nginx on :${PORT}"
+
+runuser -u ubuntu -- env -u TERMINAL_PASSWORD -u PASSWORD HOME=/data USER=ubuntu LOGNAME=ubuntu \
+  ttyd \
+  --debug 3 \
   --interface 127.0.0.1 \
   --port "${TTYD_INTERNAL_PORT}" \
   --credential "${TTYD_USER}:${PASSWORD}" \
@@ -87,19 +130,13 @@ ttyd \
   --max-clients 8 \
   --terminal-type xterm-256color \
   /bin/bash -l &
-ttyd_pid=$!
+pids+=("$!")
 
 nginx -c "${NGINX_CONF}" &
-nginx_pid=$!
+pids+=("$!")
 
-term() {
-  kill -TERM "${ttyd_pid}" "${nginx_pid}" 2>/dev/null || true
-}
-trap term SIGTERM SIGINT
-
-# Exit if either child dies so Railway restarts the whole service.
-wait -n "${ttyd_pid}" "${nginx_pid}"
-status=$?
-term
-wait "${ttyd_pid}" "${nginx_pid}" 2>/dev/null || true
+# A clean child exit is also unexpected; restart the entire service.
+status=0
+wait -n "${pids[@]}" || status=$?
+if (( status == 0 )); then status=1; fi
 exit "${status}"
